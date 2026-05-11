@@ -1,0 +1,36 @@
+# Web framework
+fastapi
+uvicorn
+python-multipart
+
+# LLM & AI
+openai
+huggingface-hub
+numpy<2
+sentence-transformers
+chromadb
+
+# OCR
+pytesseract
+pdf2image
+Pillow
+
+# Utils
+python-dotenv
+nltk
+requests
+pymupdf
+# Image Description API — dependencies
+# Install with: pip install -r requirements.txt
+
+fastapi==0.136.1
+uvicorn==0.46.0
+python-multipart==0.0.26
+langchain==0.3.21
+langchain-openai==0.3.35
+langchain-core==0.3.84
+langsmith==0.3.45
+openai==2.32.0
+tiktoken==0.12.0
+python-dotenv==1.0.1
+google-generativeai
