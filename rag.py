@@ -14,19 +14,15 @@ from llm import generate_response
 from config import export_to_folder
 
 
-# ─────────────────────────────────────────────
-# 🔧 CLEAN TEXT
-# ─────────────────────────────────────────────
+
 def clean_text(text: str) -> str:
     text = text.replace("\n", " ")
     text = " ".join(text.split())
     return text[:5000]
 
 
-# ─────────────────────────────────────────────
-# 📦 LOAD MODEL
-# ─────────────────────────────────────────────
-print("\n[🔄] Loading embedding model...")
+
+print("\n Loading embedding model...")
 
 model_path = os.path.join(MODEL_DIR, "config.json")
 
@@ -39,22 +35,20 @@ if not os.path.exists(model_path):
 
 _EMBEDDING_MODEL = SentenceTransformer(MODEL_DIR)
 
-print("[✅] Embedding model ready")
+print(" Embedding model ready")
 
 
-# ─────────────────────────────────────────────
-# 🧠 BUILD INDEX
-# ─────────────────────────────────────────────
+
 def build_or_load_index(folder: str = OUTPUT_DIR, persist_dir: str = RAG_DIR):
 
-    print("[🗂️] Loading RAG index...")
+    print(" Loading RAG index...")
 
     client = chromadb.PersistentClient(path=persist_dir)
     collection = client.get_or_create_collection("edu_docs")
 
-    # 🔥 IMPORTANT FIX
+   
     if collection.count() > 0:
-        print(f"[⚡] Using cached index ({collection.count()} docs)")
+        print(f" Using cached index ({collection.count()} docs)")
         return collection
 
     docs = []
@@ -68,10 +62,10 @@ def build_or_load_index(folder: str = OUTPUT_DIR, persist_dir: str = RAG_DIR):
             continue
 
     if not docs:
-        print("[⚠️] No documents found")
+        print(" No documents found")
         return collection
 
-    print(f"[🔄] Encoding {len(docs)} docs...")
+    print(f" Encoding {len(docs)} docs...")
 
     embeddings = [
         _EMBEDDING_MODEL.encode(d["text"]).tolist()
@@ -85,14 +79,12 @@ def build_or_load_index(folder: str = OUTPUT_DIR, persist_dir: str = RAG_DIR):
         embeddings=embeddings,
     )
 
-    print(f"[✅] Indexed {len(docs)} documents")
+    print(f" Indexed {len(docs)} documents")
 
     return collection
 
 
-# ─────────────────────────────────────────────
-# 🔎 RETRIEVE
-# ─────────────────────────────────────────────
+
 def retrieve_passages(query: str, collection, top_k: int = 5):
 
     if not collection or collection.count() == 0:
@@ -113,13 +105,11 @@ def retrieve_passages(query: str, collection, top_k: int = 5):
         return flat
 
     except Exception as e:
-        print(f"[❌] Retrieval error: {e}")
+        print(f" Retrieval error: {e}")
         return []
 
 
-# ─────────────────────────────────────────────
-# 📚 STUDY CONTEXT (NEW 🔥)
-# ─────────────────────────────────────────────
+
 def get_study_context(collection, text: str, top_k: int = 5):
 
     if not collection or collection.count() == 0:
@@ -141,7 +131,7 @@ import re
 
 def auto_scan_text(text_content: str, api_key: str, model_id: str):
 
-    print("[🔍] Scanning definitions & rules...")
+    print(" Scanning definitions & rules...")
 
     system_prompt = """
 You are a strict extraction engine.
@@ -177,14 +167,13 @@ TEXT:
         result = response.choices[0].message.content
 
         if not result:
-            print("[⚠️] Empty LLM response")
+            print(" Empty LLM response")
             return
 
-        print("[🧠] LLM output sample:\n", result[:300])
+        print(" LLM output sample:\n", result[:300])
 
         extracted_count = 0
 
-        # ── STRONG PARSER ─────────────────────────────
         pattern = r"\[(DEFINITION|RULE):\s*(.*?)\]\s*(.*)"
 
         for line in result.split("\n"):
@@ -205,17 +194,16 @@ TEXT:
 
             if type_.upper() == "DEFINITION":
                 export_to_folder("definitions", name, body)
-                print(f"[✔️] Definition saved: {name}")
+                print(f" Definition saved: {name}")
                 extracted_count += 1
 
             elif type_.upper() == "RULE":
                 export_to_folder("rules", name, body)
-                print(f"[✔️] Rule saved: {name}")
+                print(f" Rule saved: {name}")
                 extracted_count += 1
 
-        # ── FALLBACK ALWAYS (مش بس لما يفشل) ─────────────
         if extracted_count < 3:
-            print("[⚠️] Weak extraction → running fallback")
+            print(" Weak extraction → running fallback")
 
             sentences = re.split(r'[.\n]', text_content)
 
@@ -233,13 +221,12 @@ TEXT:
                 if any(x in s for x in ["=", "→", "∝", "|"]):
                     export_to_folder("rules", "Auto", s)
 
-        print(f"[📊] Total extracted: {extracted_count}")
+        print(f" Total extracted: {extracted_count}")
 
     except Exception as e:
-        print(f"[❌] Auto scan failed: {e}")
+        print(f" Auto scan failed: {e}")
 
-# 💾 MEMORY
-# ─────────────────────────────────────────────
+
 def save_chat_log(question: str, answer: str, log_filename="persistent_memory.md"):
 
     path = os.path.join(CHAT_LOG_DIR, log_filename)
