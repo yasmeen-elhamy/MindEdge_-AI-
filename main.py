@@ -1,206 +1,248 @@
 """
-EduScan – Intelligent Study Scanner & Tutor
+llm.py — LLM API Module (Qwen via HF Router)
+=============================================
+All calls to the Qwen language model.
+
+TTS INTEGRATION:
+  - DEV_AUDIO_MODE=true  → every response is automatically spoken via pyttsx3
+  - DEV_AUDIO_MODE=false → silent; frontend handles audio (PROD default)
+
+Set in .env:
+  DEV_AUDIO_MODE=true   # or false
+"""
+import os
+import time
+from typing import Optional
+
+from dotenv import load_dotenv
+from openai import OpenAI, APIStatusError, APITimeoutError, APIConnectionError
+
+load_dotenv()
+
+DEV_AUDIO_MODE: bool = False
+
+_QW_BASE_URL      = "https://api.openai.com/v1"
+_QW_MODEL_ID      = "gpt-4o-mini"
+_QW_MAX_TOKENS    = 2048
+_QW_TEMPERATURE   = 0.7
+_QW_TOP_P         = 0.9
+_QW_TIMEOUT       = 90
+_QW_MAX_RETRIES   = 4
+_QW_BACKOFF_BASE  = 2.0
+_QW_SYSTEM_PROMPT = "You are a helpful AI assistant."
+_QW_CLIENT: Optional[OpenAI] = None
+
+def _get_client() -> OpenAI:
+    global _QW_CLIENT
+    if _QW_CLIENT is None:
+        token = os.environ.get("OPENAI_API_KEY", "").strip()
+        if not token:
+            raise EnvironmentError(
+                "\n[llm]   OPENAI_API_KEY is not set!\n"
+                "  Fix: create a .env file with: OPENAI_API_KEY=sk-your_key_here"
+            )
+        _QW_CLIENT = OpenAI(base_url=_QW_BASE_URL, api_key=token)
+    return _QW_CLIENT
+
+
+def generate_response(
+    prompt: str,
+    max_tokens: int = _QW_MAX_TOKENS,
+    system_prompt: str = _QW_SYSTEM_PROMPT,
+) -> str:
+    """Sends a prompt to the model and returns the response string."""
+    client = _get_client()
+    print(f" Calling HF Router → {_QW_MODEL_ID}")
+
+    for attempt in range(1, _QW_MAX_RETRIES + 1):
+        backoff = _QW_BACKOFF_BASE ** (attempt - 1)
+        try:
+            completion = client.chat.completions.create(
+                model=_QW_MODEL_ID,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",   "content": prompt},
+                ],
+                max_tokens=max_tokens,
+                temperature=_QW_TEMPERATURE,
+                top_p=_QW_TOP_P,
+                timeout=_QW_TIMEOUT,
+            )
+            answer = completion.choices[0].message.content.strip()
+            usage  = getattr(completion, "usage", None)
+            if usage:
+                print(f" Done — {usage.total_tokens} tokens used.")
+            else:
+                print(f" Response received ({len(answer)} chars).")
+            return answer
+
+        except APIStatusError as exc:
+            code = exc.status_code
+            if code == 503:
+                try:    wait = max(float(exc.body.get("estimated_time", backoff)), backoff)
+                except: wait = backoff
+                print(f" 503 – Model loading, waiting {wait:.0f}s… ({attempt}/{_QW_MAX_RETRIES})")
+            elif code == 429:
+                print(f" 429 – Rate limited, backing off {backoff:.0f}s… ({attempt}/{_QW_MAX_RETRIES})")
+                wait = backoff
+            else:
+                msg = f"HTTP {code}: {str(exc)[:300]}"
+                print(f" {msg}")
+                return f"Error: {msg}"
+            if attempt < _QW_MAX_RETRIES:
+                time.sleep(wait)
+                continue
+            return f"Error: HTTP {code} after {_QW_MAX_RETRIES} attempts."
+
+        except APITimeoutError:
+            print(f"  Timeout ({attempt}/{_QW_MAX_RETRIES})")
+            if attempt < _QW_MAX_RETRIES:
+                time.sleep(backoff)
+                continue
+            return f"Error: Timeout after {_QW_MAX_RETRIES} attempts."
+
+        except APIConnectionError as exc:
+            msg = f"Connection error: {exc}"
+            print(f" {msg}")
+            if attempt < _QW_MAX_RETRIES:
+                time.sleep(backoff)
+                continue
+            return f"Error: {msg}"
+
+    return f"Error: All {_QW_MAX_RETRIES} attempts failed."
+
+
+
+
+def dev_ask_llm(
+    system_prompt: str,
+    user_prompt: str,
+    **kwargs,
+) -> str:
+    """
+    Central wrapper around generate_response that adds DEV-mode TTS.
+
+    DEV_AUDIO_MODE=true  → response is printed AND spoken automatically.
+    DEV_AUDIO_MODE=false → response is returned silently (PROD behaviour).
+
+    Drop-in replacement for any direct generate_response(...) call.
+    """
+    response = generate_response(
+        prompt=user_prompt,
+        system_prompt=system_prompt,
+        **kwargs,
+    )
+    return response
+
+
+
+
+def correct_text(text: str) -> str:
+    """Corrects and enriches OCR-extracted text."""
+    print(" Correcting text…")
+    system = "You are an expert educational content editor."
+    user   = (
+        "Correct the spelling and grammar of this educational content. "
+        "Expand on ideas and add more detail to make the text clearer and richer. "
+        "Return the output in well-structured Markdown format:\n\n"
+        f"{text}"
+    )
+    return dev_ask_llm(system, user)
+
+
+def summarize_text(text: str) -> str:
+    """Generates a comprehensive summary of the given text."""
+    print(" Summarizing text…")
+    system = "You are an expert educational content summarizer."
+    user   = (
+        "Write a detailed and comprehensive summary of the following educational text. "
+        "Include all important points and explain concepts where possible. "
+        "Return the output in well-structured Markdown format:\n\n"
+        f"{text}"
+    )
+    return dev_ask_llm(system, user)
+
+
+def test_connection() -> bool:
+    """
+    Tests the connection to the LLM endpoint.
+    Intentionally bypasses dev_ask_llm (no TTS for health checks).
+    """
+    print("[🔬] Testing connection to HF Inference Router…")
+    result = generate_response("Reply with the single word: OK", max_tokens=10)
+    ok = not result.startswith("Error:")
+    print(f"[{'✅' if ok else '❌'}] Test {'PASSED' if ok else 'FAILED'} → {result[:80]}")
+    return ok
+
+
+
+
+
+
+
+
+import json
+
+
+def generate_quiz_llm(context: str, num_questions: int = 5):
+    from llm import dev_ask_llm  # 👈 import داخلي عشان avoid مشاكل
+
+    system_prompt = "You are a professional quiz generator."
+
+    user_prompt = f"""
+Generate a quiz based on this content:
+
+{context}
+
+Requirements:
+- {num_questions} questions
+- Mix MCQ and short answer
+- Return ONLY JSON:
+
+[
+  {{
+    "question": "...",
+    "type": "mcq",
+    "options": ["A", "B", "C", "D"],
+    "answer": "A"
+  }},
+  {{
+    "question": "...",
+    "type": "text",
+    "answer": "..."
+  }}
+]
 """
 
-import os
-import sys
-import glob
-import zipfile
-import platform
-import subprocess
-import nltk
-from datetime import datetime
-from pathlib import Path
+    return dev_ask_llm(system_prompt, user_prompt)
 
-# ── Local modules ─────────────────────────────────────────
-from config import (
-    setup_output_dirs,
-    load_token,
-    pick_files,
-    PROJECT_ROOT,
-    OUTPUT_DIR,
-    CHAT_LOG_DIR
-)
 
-from llm import summarize_text, test_connection
-from ocr import setup_tesseract, run_ocr_pipeline
-from rag import build_or_load_index, auto_scan_text
-from chat import run_chat_loop
-from image import extract_and_analyze_graphs
-from study_plan import generate_study_plan
-from topic_extractor import extract_topics_from_text   # 🔥 NEW
+def grade_quiz_llm(quiz, user_answers):
+    from llm import dev_ask_llm
 
-# ── Bootstrap ───────────────────────────────────────────
-setup_output_dirs()
-HF_TOKEN = load_token()
-FILE_PATHS = pick_files()
+    system_prompt = "You are a strict grading assistant."
 
-if not FILE_PATHS:
-    print("[❌] No files selected.")
-    sys.exit(1)
+    user_prompt = f"""
+QUIZ:
+{json.dumps(quiz, indent=2)}
 
-nltk.download("punkt", quiet=True)
-nltk.download("punkt_tab", quiet=True)
+USER ANSWERS:
+{json.dumps(user_answers, indent=2)}
 
-print(f"\n[✅] Configuration complete.")
-print(f"OUTPUT_DIR : {OUTPUT_DIR}")
-print(f"FILES      : {len(FILE_PATHS)}")
+Return ONLY JSON:
 
-# ── Test LLM ────────────────────────────────────────────
-if not test_connection():
-    print("[❌] LLM connection failed.")
+{{
+  "score": X,
+  "total": Y,
+  "feedback": [
+    {{
+      "question": "...",
+      "correct": "...",
+      "user": "...",
+      "is_correct": true/false
+    }}
+  ]
+}}
+"""
 
-# ── OCR Setup ───────────────────────────────────────────
-setup_tesseract()
-
-# ======================================================
-# STAGE 1 — OCR
-# ======================================================
-all_corrected_texts, last_raw_text = run_ocr_pipeline(FILE_PATHS)
-
-if not all_corrected_texts:
-    print("[❌] No text extracted.")
-    sys.exit(1)
-
-# ======================================================
-# STAGE 1b — GRAPH ANALYSIS
-# ======================================================
-print("\n🖼️  GRAPH ANALYSIS")
-
-graph_results = []
-
-for path in FILE_PATHS:
-    try:
-        graph_results.extend(
-            extract_and_analyze_graphs(path, hf_token=HF_TOKEN)
-        )
-    except Exception:
-        continue
-
-graphs_md_path = os.path.join(OUTPUT_DIR, "graphs.md")
-
-with open(graphs_md_path, "w", encoding="utf-8") as f:
-    f.write("# Graph Analysis\n\n")
-    for r in graph_results:
-        f.write(f"## {os.path.basename(r['image_path'])}\n\n")
-        f.write(f"{r['analysis']}\n\n---\n\n")
-
-print(f"[✅] {len(graph_results)} graphs analyzed")
-
-# ======================================================
-# STAGE 2 — SUMMARIZATION
-# ======================================================
-print("\n📄 SUMMARIZATION")
-
-detected_topics = []
-
-for path, corrected in all_corrected_texts.items():
-    print(f"→ {os.path.basename(path)}")
-
-    summary = summarize_text(corrected)
-    if summary.startswith("Error"):
-        summary = "No summary"
-
-    stem = Path(path).stem.replace(" ", "_")
-
-    with open(os.path.join(OUTPUT_DIR, f"{stem}_summary.md"), "w", encoding="utf-8") as f:
-        f.write(summary)
-
-    # 🔥 Extract real topics (AI)
-    try:
-        topics = extract_topics_from_text(corrected[:3000])
-        detected_topics.extend(topics)
-    except:
-        detected_topics.append(stem)
-
-# remove duplicates
-detected_topics = list(set(detected_topics))
-
-print(f"[✅] Summaries done")
-
-# ======================================================
-# STAGE 4 — RAG INDEX (قبل study plan)
-# ======================================================
-print("\n🗂️  BUILDING RAG")
-
-collection = build_or_load_index(folder=OUTPUT_DIR)
-
-print(f"[✅] {collection.count()} docs indexed")
-
-# ======================================================
-# STAGE 3 — STUDY PLAN
-# ======================================================
-print("\n📅 STUDY PLAN")
-
-try:
-    sp_days = int(input("Days [7]: ") or 7)
-    sp_hours = int(input("Hours/day [2]: ") or 2)
-    sp_level = input("Level (Beginner/Intermediate/Advanced) [Intermediate]: ") or "Intermediate"
-
-    if sp_level not in ["Beginner", "Intermediate", "Advanced"]:
-        sp_level = "Intermediate"
-
-    sp_subject = input(f"Subject [{detected_topics[0] if detected_topics else 'Study'}]: ") \
-        or (detected_topics[0] if detected_topics else "Study")
-
-except:
-    sp_days, sp_hours, sp_level = 7, 2, "Intermediate"
-    sp_subject = detected_topics[0] if detected_topics else "Study"
-
-study_plan_dict = generate_study_plan(
-    topics=detected_topics,
-    days=sp_days,
-    hours_per_day=sp_hours,
-    subject=sp_subject,
-    level=sp_level,
-    collection=collection   # 🔥 IMPORTANT
-)
-
-sp_path = os.path.join(OUTPUT_DIR, "study_plan.md")
-
-with open(sp_path, "w", encoding="utf-8") as f:
-    f.write(f"# Study Plan — {sp_subject}\n\n")
-    for d, content in study_plan_dict.items():
-        f.write(f"## {d}\n\n{content}\n\n---\n\n")
-
-print("[✅] Study plan generated")
-
-# ======================================================
-# AUTO SCAN
-# ======================================================
-if last_raw_text:
-    from llm import _QW_MODEL_ID
-    auto_scan_text(last_raw_text, HF_TOKEN, _QW_MODEL_ID)
-
-# ======================================================
-# STAGE 5 — CHAT
-# ======================================================
-chat_history = run_chat_loop(collection)
-
-timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-if chat_history:
-    path = os.path.join(OUTPUT_DIR, f"chat_{timestamp}.md")
-
-    with open(path, "w", encoding="utf-8") as f:
-        for e in chat_history:
-            f.write(f"Q: {e['question']}\nA: {e['answer']}\n---\n")
-
-    print(f"[✅] Chat saved")
-
-# ======================================================
-# EXPORT
-# ======================================================
-print("\n📦 EXPORT")
-
-export_path = str(PROJECT_ROOT / f"EduScan_{timestamp}.zip")
-
-with zipfile.ZipFile(export_path, "w") as z:
-    for folder in [OUTPUT_DIR, CHAT_LOG_DIR]:
-        for f in glob.glob(os.path.join(folder, "**", "*"), recursive=True):
-            if os.path.isfile(f):
-                z.write(f, os.path.relpath(f, folder))
-
-print(f"[✅] Exported → {export_path}")
-
-print("\n🎉 DONE")
+    return dev_ask_llm(system_prompt, user_prompt)
