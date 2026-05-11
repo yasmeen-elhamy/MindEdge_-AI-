@@ -15,18 +15,14 @@ from openai import OpenAI, APIStatusError, APITimeoutError, APIConnectionError
 import os
 from dotenv import load_dotenv
 
-# ─────────────────────────────────────────────────────────────
-# ENV
-# ─────────────────────────────────────────────────────────────
+
 load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 if not OPENAI_API_KEY:
     raise EnvironmentError("OPENAI_API_KEY not found in .env")
 
-# ─────────────────────────────────────────────────────────────
-# CONFIG
-# ─────────────────────────────────────────────────────────────
+
 _QW_BASE_URL      = "https://api.openai.com/v1"
 _QW_MODEL_ID      = "gpt-4o-mini"
 _QW_MAX_TOKENS    = 2000
@@ -36,14 +32,10 @@ _QW_TIMEOUT       = 60
 _QW_MAX_RETRIES   = 3
 _QW_BACKOFF_BASE  = 2.0
 
-# ─────────────────────────────────────────────────────────────
-# LOGGING
-# ─────────────────────────────────────────────────────────────
+
 log = logging.getLogger("StudyPlan")
 
-# ─────────────────────────────────────────────────────────────
-# CLIENT
-# ─────────────────────────────────────────────────────────────
+
 _CLIENT: Optional[OpenAI] = None
 
 def _get_client() -> OpenAI:
@@ -53,9 +45,7 @@ def _get_client() -> OpenAI:
     return _CLIENT
 
 
-# ─────────────────────────────────────────────────────────────
-# LLM CALL
-# ─────────────────────────────────────────────────────────────
+
 def llm_chat(system_prompt: str, user_prompt: str, max_tokens: int) -> str:
     client = _get_client()
 
@@ -86,9 +76,7 @@ def llm_chat(system_prompt: str, user_prompt: str, max_tokens: int) -> str:
     return "Error: LLM failed"
 
 
-# ─────────────────────────────────────────────────────────────
-# FALLBACK
-# ─────────────────────────────────────────────────────────────
+
 def _fallback_plan(subject, days, hours, level, topics):
     result = []
     for i in range(1, days + 1):
@@ -98,9 +86,7 @@ def _fallback_plan(subject, days, hours, level, topics):
     return "\n".join(result)
 
 
-# ─────────────────────────────────────────────────────────────
-# PROMPT
-# ─────────────────────────────────────────────────────────────
+
 def _build_prompt(subject, days, hours, level, topics):
 
     topics_str = "\n".join(f"- {t}" for t in topics)
@@ -130,9 +116,7 @@ Repeat for all days.
     return system, user
 
 
-# ─────────────────────────────────────────────────────────────
-# PARSER
-# ─────────────────────────────────────────────────────────────
+
 def _parse_plan(text: str) -> Dict[str, str]:
     result = {}
     current = None
@@ -156,9 +140,7 @@ def _parse_plan(text: str) -> Dict[str, str]:
     return result
 
 
-# ─────────────────────────────────────────────────────────────
-# MAIN FUNCTION
-# ─────────────────────────────────────────────────────────────
+
 def generate_study_plan(
     topics: List[str],
     days: int,
@@ -168,7 +150,6 @@ def generate_study_plan(
     collection=None
 ) -> Dict[str, str]:
 
-    # ── Validation ──
     if not topics:
         raise ValueError("Topics list is empty")
 
@@ -183,17 +164,14 @@ def generate_study_plan(
     if subject is None:
         subject = next((t for t in topics if t.strip()), "Study Material")
 
-    # ── Build prompt ──
     system, user = _build_prompt(subject, days, hours_per_day, level, topics)
 
     max_tokens = min(2000, 80 * days)
 
-    # ── Generate ──
     plan_text = llm_chat(system, user, max_tokens)
 
     if plan_text.startswith("Error"):
         log.warning("LLM failed → fallback")
         plan_text = _fallback_plan(subject, days, hours_per_day, level, topics)
 
-    # ── Parse ──
     return _parse_plan(plan_text)
