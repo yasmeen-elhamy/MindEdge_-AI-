@@ -1,4 +1,4 @@
-# 🧠 MindEdge – Manager Backend  
+# 🧠 MindEdge – Manager AI 
 ### Intelligent Learning Assistant (AI-Powered Backend)
 
 MindEdge is an AI-powered educational backend system designed to transform uploaded learning materials into **structured knowledge**, **interactive quizzes**, and **personalized learning experiences** using OCR, Machine Learning, and Large Language Models (LLMs).
