@@ -14,9 +14,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from langchain_chain import describe_image   # our LangChain module
 
-# ---------------------------------------------------------------------------
-# App setup
-# ---------------------------------------------------------------------------
 
 app = FastAPI(
     title="Image Description API",
@@ -32,19 +29,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ---------------------------------------------------------------------------
-# Response schema
-# ---------------------------------------------------------------------------
 
 class DescriptionResponse(BaseModel):
     filename: str
     content_type: str
     description: str
 
-
-# ---------------------------------------------------------------------------
-# Routes
-# ---------------------------------------------------------------------------
 
 @app.get("/", summary="Health check")
 async def root():
@@ -64,7 +54,6 @@ async def describe_image_endpoint(
     Accept an image file, send it to GPT-4o-mini via LangChain,
     and return the generated description.
     """
-    # ── Validate MIME type ──────────────────────────────────────────────────
     allowed_types = {"image/jpeg", "image/png", "image/gif", "image/webp"}
     content_type = file.content_type or ""
     if content_type not in allowed_types:
@@ -74,12 +63,10 @@ async def describe_image_endpoint(
                    f"Allowed types: {', '.join(sorted(allowed_types))}",
         )
 
-    # ── Read image bytes ────────────────────────────────────────────────────
     image_bytes = await file.read()
     if not image_bytes:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
-    # ── Call LangChain chain ────────────────────────────────────────────────
     try:
         description = describe_image(image_bytes, media_type=content_type)
     except EnvironmentError as e:
@@ -97,9 +84,6 @@ async def describe_image_endpoint(
     )
 
 
-# ---------------------------------------------------------------------------
-# Dev entry-point
-# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     import uvicorn
