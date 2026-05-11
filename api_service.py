@@ -21,7 +21,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-# ── Local modules ──────────────────────────────────────────────────────────
 from config    import setup_output_dirs, OUTPUT_DIR, CHAT_LOG_DIR
 from llm       import correct_text, summarize_text, dev_ask_llm
 from ocr       import setup_tesseract, run_ocr, extract_text
@@ -30,7 +29,6 @@ from image     import extract_and_analyze_graphs
 from tts_utils import safe_generate_tts
 from quiz_utils import generate_quiz_from_context, grade_quiz
 
-# ── Bootstrap ──────────────────────────────────────────────────────────────
 setup_output_dirs()
 setup_tesseract()
 
@@ -38,7 +36,6 @@ HF_TOKEN = os.environ.get("HF_TOKEN", "").strip()
 if not HF_TOKEN:
     raise EnvironmentError("HF_TOKEN not set — add it to your .env file")
 
-# ── FastAPI app ────────────────────────────────────────────────────────────
 app = FastAPI(
     title="MindEdge API",
     description="Intelligent Study Scanner & Tutor",
@@ -52,14 +49,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# serve audio files
 os.makedirs("audio_cache", exist_ok=True)
 app.mount("/audio", StaticFiles(directory="audio_cache"), name="audio")
 
-# ── Router ─────────────────────────────────────────────────────────────────
 router = APIRouter()
 
-# ── Global RAG collection ──────────────────────────────────────────────────
 _collection = None
 _last_corrected_text = None
 _last_pdf_name = None
@@ -72,12 +66,11 @@ def get_collection():
     return _collection
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# MODELS
-# ══════════════════════════════════════════════════════════════════════════
+
 
 class ChatRequest(BaseModel):
     question: str
+    filename: str
     session_id: Optional[str] = "default"
     tts: Optional[bool] = False
     tts_source: Optional[str] = "response"  # "response" or "summary"
@@ -105,9 +98,7 @@ class StudyPlanRequest(BaseModel):
     level: Optional[str] = "Intermediate"
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# PRIVATE HELPERS
-# ══════════════════════════════════════════════════════════════════════════
+
 
 def _build_audio_url(text: str) -> Optional[str]:
     """Generate audio safely."""
@@ -122,20 +113,16 @@ def _build_audio_url(text: str) -> Optional[str]:
         return None
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# GLOBAL STORES
-# ══════════════════════════════════════════════════════════════════════════
+
 
 QUIZ_STORE = {}
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# ENDPOINTS
-# ══════════════════════════════════════════════════════════════════════════
+
 
 @app.get("/")
 def root():
-    return {"status": "MindEdge API is running 🚀"}
+    return {"status": "MindEdge API is running "}
 
 
 @app.get("/health")
@@ -143,7 +130,7 @@ def health():
     return {"status": "ok", "hf_token_set": bool(HF_TOKEN)}
 
 
-# ── 1. Upload & Analyze Document ──────────────────────────────────────────
+
 @router.post("/analyze-document")
 async def analyze_document(
     file: UploadFile = File(...),
@@ -201,8 +188,6 @@ async def analyze_document(
             "document_name": file.filename,
             "raw_text": raw_text[:500] + "…" if len(raw_text) > 500 else raw_text,
             "corrected_text": corrected,
-            "summary": summary,
-            "audio_url": summary_audio_url,
             "graphs_analyzed": len(graphs),
             "graphs": graphs,
         }
@@ -212,56 +197,76 @@ async def analyze_document(
             os.remove(temp_path)
 
 
-# ── 2. Chat with uploaded document ────────────────────────────────────────
+
 @app.post("/chat", response_model=ChatResponse)
 def chat(request: ChatRequest):
-    if request.tts_source not in {"response", "summary"}:
-        raise HTTPException(status_code=400, detail="Invalid tts_source")
+    try:
+        log_path = os.path.join(CHAT_LOG_DIR, f"session_{request.session_id}.md")
+        current_filename = request.filename
 
-    collection = get_collection()
+        if not current_filename or current_filename == "":
+            if os.path.exists(log_path):
+                with open(log_path, "r", encoding="utf-8") as f:
+                    first_line = f.readline().strip()
+                    if first_line.startswith("FILE:"):
+                        current_filename = first_line.replace("FILE:", "")
 
-    passages = retrieve_passages(request.question, collection, top_k=5)
-    context  = "\n\n".join(passages) if passages else "No context found."
+        if current_filename and not os.path.exists(log_path):
+            os.makedirs(CHAT_LOG_DIR, exist_ok=True) 
+            with open(log_path, "w", encoding="utf-8") as f:
+                f.write(f"FILE:{current_filename}\n")
 
-    log_path = os.path.join(CHAT_LOG_DIR, f"session_{request.session_id}.md")
-    memory   = ""
-    if os.path.exists(log_path):
-        with open(log_path, "r", encoding="utf-8") as f:
-            memory = f.read()[-3000:]
+        combined_context = ""
+        if current_filename:
+            stem = Path(current_filename).stem.replace(" ", "_")
+            doc_path = os.path.join(OUTPUT_DIR, f"{stem}_corrected.md")
+            if os.path.exists(doc_path):
+                with open(doc_path, "r", encoding="utf-8") as f:
+                    combined_context = f.read()[:5000] # نحدد الحجم عشان الـ Performance
 
-    # ── Split into system / user prompts for dev_ask_llm ─────────────────
-    system_prompt = "You are a helpful study assistant."
+        memory = ""
+        if os.path.exists(log_path):
+            with open(log_path, "r", encoding="utf-8") as f:
+                all_lines = f.readlines()
+                memory = "".join([l for l in all_lines if not l.startswith("FILE:")][-10:])
 
-    user_prompt = (
-        f"[MEMORY]:\n{memory}\n\n"
-        f"[PDF CONTEXT]:\n{context}\n\n"
-        f"[QUESTION]: {request.question}\n\n"
-        "Answer from context first. Format laws as [RULE: Name] Formula. English only."
-    )
+        system_prompt = "You are a helpful study assistant. Use the PDF Context to answer. If not found, use general knowledge but mention it."
+        user_prompt = f"[MEMORY]:\n{memory}\n\n[PDF CONTEXT]:\n{combined_context}\n\n[QUESTION]: {request.question}"
+        
+        answer = dev_ask_llm(system_prompt, user_prompt)
+        
+        save_chat_log(request.question, answer, log_filename=f"session_{request.session_id}.md")
 
-    # ── Call LLM via TTS-aware wrapper ────────────────────────────────────
-    answer = dev_ask_llm(system_prompt, user_prompt)
-    save_chat_log(request.question, answer, log_filename=f"session_{request.session_id}.md")
+        return ChatResponse(
+            answer=answer,
+            audio_url=_build_audio_url(answer[:800]) if request.tts else None,
+            session_id=request.session_id
+        )
 
-    # ── TTS logic ────────────────────────────────────────────────────────
-    audio_url = None
-    if request.tts:
-        audio_url = _build_audio_url(answer[:800])
+    except Exception as e:
+        print(f"[ ERROR IN CHAT]: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-    return ChatResponse(
-        answer=answer,
-        audio_url=audio_url,
-        session_id=request.session_id
-    )
+class QuizRequest(BaseModel):
+    filename: str 
+    num_questions: int = 5
 
+class QuizSubmitRequest(BaseModel):
+    quiz_id: str
+    answers: list
 
-# ── 3. Quiz endpoints ─────────────────────────────────────────────────────
+QUIZ_STORE = {}
+
 @app.post("/quiz/generate")
 def generate_quiz(request: QuizRequest):
-    collection = get_collection()
+    stem = Path(request.filename).stem.replace(" ", "_")
+    doc_path = os.path.join(OUTPUT_DIR, f"{stem}_corrected.md")
 
-    passages = retrieve_passages(request.topic, collection, top_k=5)
-    context = "\n\n".join(passages) if passages else "No context found."
+    if not os.path.exists(doc_path):
+        raise HTTPException(status_code=404, detail="المحاضرة دي مش موجودة، ارفعيها الأول.")
+
+    with open(doc_path, "r", encoding="utf-8") as f:
+        context = f.read()
 
     quiz = generate_quiz_from_context(context, request.num_questions)
 
@@ -274,12 +279,13 @@ def generate_quiz(request: QuizRequest):
     quiz_for_user = []
     for q in quiz:
         q_copy = q.copy()
-        q_copy.pop("answer", None)
+        q_copy.pop("answer", None) 
         quiz_for_user.append(q_copy)
 
     return {
         "quiz_id": quiz_id,
-        "quiz": quiz_for_user
+        "quiz": quiz_for_user,
+        "filename": request.filename
     }
 
 
@@ -288,11 +294,12 @@ def submit_quiz(request: QuizSubmitRequest):
     quiz = QUIZ_STORE.get(request.quiz_id)
 
     if not quiz:
-        raise HTTPException(status_code=404, detail="Quiz not found")
+        raise HTTPException(status_code=404, detail="الكويز ده انتهى أو مش موجود.")
 
     if len(request.answers) != len(quiz):
-        raise HTTPException(status_code=400, detail="Answers count mismatch")
+        raise HTTPException(status_code=400, detail="عدد الإجابات مش مطابق لعدد الأسئلة.")
 
+    
     result = grade_quiz(request.answers, quiz)
 
     return result
@@ -315,13 +322,13 @@ def get_summary(
     summary_audio_url = None
 
     if tts and summary and summary.strip():
-        print("[🔊] Generating TTS for summary...")
+        print(" Generating TTS for summary...")
         clean_summary = summary.replace("```", "").strip()
         filename_audio = safe_generate_tts(clean_summary[:1000])
         if filename_audio:
             summary_audio_url = f"/audio/{filename_audio}"
         else:
-            print("[⚠️] TTS failed.")
+            print(" TTS failed.")
 
     return {
         "filename": filename,
@@ -330,51 +337,70 @@ def get_summary(
     }
 
 
-# ── 4. Get extracted rules & definitions ──────────────────────────────────
 import glob
 
 @app.get("/rules")
-def get_rules():
-    """Returns all extracted physics rules."""
+def get_rules(filename: str = Query(..., description="Document filename (e.g., lecture1.pdf)")):
+    """Returns physics/math rules strictly for the requested file."""
+    
+    stem = Path(filename).stem.replace(" ", "_")
+    doc_path = os.path.join(OUTPUT_DIR, f"{stem}_corrected.md")
 
-    folder = os.path.join(OUTPUT_DIR, "rules")
+    if not os.path.exists(doc_path):
+        raise HTTPException(status_code=404, detail="Lecture not found. Please upload it first.")
 
-    if not os.path.exists(folder):
-        return {"rules": []}
+    with open(doc_path, "r", encoding="utf-8") as f:
+        content = f.read()
 
-    results = []
+    system_prompt = "You are an expert scientific AI assistant."
+    user_prompt = (
+        "Extract physical laws and formulas from the lecture text. "
+        "Format each rule clearly using the following Markdown template:\n\n"
+        "###  [Rule Name]\n"
+        "**Formula:** `[The Formula Here]`\n"
+        "**Description:** [Brief explanation of what the law does]\n"
+        "**Variables:**\n"
+        "- `var1`: definition\n"
+        "- `var2`: definition\n"
+        "--- \n\n" 
+        "STRICT RULE: Do NOT include general definitions. Only scientific laws and equations. "
+        f"\n\nLecture Text:\n{content[:4000]}"
+    )
+    extracted_rules = dev_ask_llm(system_prompt, user_prompt)
 
-    for file_path in glob.glob(os.path.join(folder, "*.txt")):
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read().strip()
-                if content:
-                    results.append(content)
-        except Exception as e:
-            print(f"[⚠️] Failed reading {file_path}: {e}")
-            continue
-
-    return {"rules": results}
+    return {
+        "filename": filename,
+        "rules": extracted_rules
+    }
 
 
 @app.get("/definitions")
-def get_definitions():
-    folder = os.path.join(OUTPUT_DIR, "definitions")
+def get_definitions(filename: str = Query(..., description="Document filename (e.g., lecture1.pdf)")):
+    """Returns definitions strictly for the requested file."""
+    
+    stem = Path(filename).stem.replace(" ", "_")
+    doc_path = os.path.join(OUTPUT_DIR, f"{stem}_corrected.md")
 
-    if not os.path.exists(folder):
-        return {"definitions": []}
+    if not os.path.exists(doc_path):
+        raise HTTPException(status_code=404, detail="Lecture not found. Please upload it first.")
 
-    results = []
+    with open(doc_path, "r", encoding="utf-8") as f:
+        content = f.read()
 
-    for file in glob.glob(os.path.join(folder, "*.txt")):
-        with open(file, "r", encoding="utf-8") as f:
-            content = f.read().strip()
-            if content:
-                results.append(content)
+    system_prompt = "You are an expert educational AI assistant."
+    user_prompt = (
+        "Extract all the key definitions, terms, and core concepts from the following lecture text. "
+        "Format them clearly. If none are found, reply with 'No definitions found in this lecture'.\n\n"
+        f"Lecture Text:\n{content[:4000]}"
+    )
 
-    return {"definitions": results}
+    extracted_definitions = dev_ask_llm(system_prompt, user_prompt)
 
-# ── 5. Get graph analysis results ─────────────────────────────────────────
+    return {
+        "filename": filename,
+        "definitions": extracted_definitions
+    }
+
 @app.get("/graphs")
 def get_graphs():
     """Returns all graph analysis results."""
@@ -385,55 +411,45 @@ def get_graphs():
         results.append({"file": os.path.basename(path), "analysis": content})
     return {"graphs": results}
 
-
-# ── 6. Study Plan ─────────────────────────────────────────────────────────
 @router.post("/study-plan")
 def get_study_plan(
     request: StudyPlanRequest,
-    tts: bool = Query(False)
+    filename: str = Query(..., description="The name of the lecture file"),
 ):
-    """Generate study plan from last uploaded PDF."""
+    import json
+    
+    stem = Path(filename).stem.replace(" ", "_")
+    doc_path = os.path.join(OUTPUT_DIR, f"{stem}_corrected.md")
 
-    # ── Check document exists ──
-    if not _last_corrected_text:
-        raise HTTPException(status_code=400, detail="No document uploaded yet.")
+    if not os.path.exists(doc_path):
+        raise HTTPException(status_code=400, detail="Lecture file not found.")
 
-    # ── Validate input ──
-    if request.days <= 0 or request.hours_per_day <= 0:
-        raise HTTPException(status_code=400, detail="Invalid input values")
+    with open(doc_path, "r", encoding="utf-8") as f:
+        text_content = f.read()
 
-    # ── Extract topics ──
-    topics = extract_topics_from_text(_last_corrected_text[:3000])
-
-    if not topics:
-        raise HTTPException(status_code=500, detail="Failed to extract topics.")
-
-    # ── Generate plan ──
-    plan = generate_study_plan(
-        topics=topics,
-        days=request.days,
-        hours_per_day=request.hours_per_day,
-        level=request.level,
+    system_prompt = "You are an expert academic personal coach."
+    user_prompt = (
+        f"Create a personalized study plan for a {request.level} student. "
+        f"The plan must span {request.days} days, with {request.hours_per_day} hours of study per day. "
+        "STRICT RULE: Return ONLY a JSON list of day objects. "
+        "Structure: [{'day': 1, 'topic': '...', 'tasks': [{'task_name': '...', 'duration': '... min', 'priority': '...'}]}] "
+        f"\n\nLecture Content:\n{text_content[:4000]}"
     )
 
-    # ── Convert plan to text (for TTS) ──
-    plan_text = f"Your study plan for {_last_pdf_name} is ready"
-
-    # ── TTS ──
-    audio_url = None
-    if tts:
-        audio_url = _build_audio_url(plan_text[:1000])
-
-    # ── Response ──
-    return {
-        "status": "success",
-        "pdf": _last_pdf_name or "unknown",
-        "topics_found": len(topics),
-        "topics": topics,
-        "plan": plan,
-        "audio_url": audio_url
-    }
-
-
-# ── Register router ────────────────────────────────────────────────────────
+    raw_response = dev_ask_llm(system_prompt, user_prompt)
+    
+    try:
+        clean_json = raw_response.strip().replace("```json", "").replace("```", "")
+        plan_json = json.loads(clean_json)
+        
+        return {
+            "status": "success",
+            "filename": filename,
+            "student_level": request.level,
+            "total_days": request.days,
+            "hours_per_day": request.hours_per_day,
+            "study_plan": plan_json
+        }
+    except Exception as e:
+        return {"status": "error", "message": "AI formatting error", "raw": raw_response}
 app.include_router(router)
