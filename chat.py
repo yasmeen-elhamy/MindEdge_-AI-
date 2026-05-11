@@ -23,7 +23,6 @@ def run_chat_loop(collection) -> list:
     chat_history = []
     all_exchanges = []
 
-    # ── Voice Mode ─────────────────────────
     try:
         print("\n🎧 Voice mode:")
         print("1) Always ON")
@@ -41,13 +40,13 @@ def run_chat_loop(collection) -> list:
     current_summary = load_previous_summary(log_filename)
 
     print("\n" + "═" * 60)
-    print("🤖  AI CHAT (RAG + STUDY PLAN + TTS)")
+    print("  AI CHAT (RAG + STUDY PLAN + TTS)")
     print("Type 'exit' to quit")
     print("═" * 60)
 
     while True:
         try:
-            query = input("\n❓ Ask: ").strip()
+            query = input("\n Ask: ").strip()
         except (KeyboardInterrupt, EOFError):
             print("\n[Session Ended]")
             break
@@ -58,12 +57,10 @@ def run_chat_loop(collection) -> list:
         if query.lower() in {"exit", "quit", "q"}:
             break
 
-        # ============================================================
-        # 🎯 1. STUDY PLAN INTENT
-        # ============================================================
+        
         if "study plan" in query.lower():
 
-            print("[📚] Generating study plan...")
+            print(" Generating study plan...")
 
             passages = retrieve_passages(query, collection, top_k=5)
             context = "\n".join(passages)
@@ -71,7 +68,7 @@ def run_chat_loop(collection) -> list:
             topics = extract_topics_from_text(context[:3000])
 
             if not topics:
-                print("[❌] Could not extract topics")
+                print(" Could not extract topics")
                 continue
 
             try:
@@ -82,10 +79,10 @@ def run_chat_loop(collection) -> list:
                     level="Intermediate"
                 )
             except Exception as e:
-                print(f"[❌] Study plan failed: {e}")
+                print(f" Study plan failed: {e}")
                 continue
 
-            print("\n📅 Study Plan:\n")
+            print("\n Study Plan:\n")
 
             plan_text = ""
             for day, content in plan.items():
@@ -95,18 +92,15 @@ def run_chat_loop(collection) -> list:
 
                 plan_text += f"{day}\n{content}\n\n"
 
-            # 🔊 TTS for plan
-            if use_tts_global or (ask_each_time and input("🔊 Play audio? (y/n): ") == "y"):
+            if use_tts_global or (ask_each_time and input(" Play audio? (y/n): ") == "y"):
                 clean = plan_text.replace("\n", " ").strip()
                 filename = safe_generate_tts(clean[:1000])
                 if filename:
-                    print(f"[🔊] audio_cache/{filename}")
+                    print(f" audio_cache/{filename}")
 
             continue
 
-        # ============================================================
-        # 🎯 2. NORMAL CHAT (RAG)
-        # ============================================================
+        
         passages = retrieve_passages(query, collection, top_k=5)
         context = "\n\n".join(passages) if passages else "No context found."
 
@@ -131,9 +125,7 @@ def run_chat_loop(collection) -> list:
         print(answer)
         print("─" * 60)
 
-        # ============================================================
-        # 🔊 TTS
-        # ============================================================
+      
         use_tts = use_tts_global
 
         if ask_each_time:
@@ -143,11 +135,9 @@ def run_chat_loop(collection) -> list:
             clean_answer = answer.replace("\n", " ").strip()
             filename = safe_generate_tts(clean_answer[:1000])
             if filename:
-                print(f"[🔊] audio_cache/{filename}")
+                print(f" audio_cache/{filename}")
 
-        # ============================================================
-        # 📚 Auto Classification (safe regex)
-        # ============================================================
+        
         try:
             rules = re.findall(r"\[RULE:(.*?)\](.*)", answer)
             for name, content in rules:
@@ -162,15 +152,12 @@ def run_chat_loop(collection) -> list:
         except:
             pass
 
-        # ============================================================
-        # 💾 Save
-        # ============================================================
+        
         save_chat_log(query, answer, log_filename=log_filename)
 
         chat_history.append({"question": query, "answer": answer})
         all_exchanges.append({"question": query, "answer": answer})
 
-        # summarization
         if len(chat_history) >= 5:
             current_summary = summarize_chat_history(chat_history)
             chat_history = []
