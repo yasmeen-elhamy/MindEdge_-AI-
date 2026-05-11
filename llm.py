@@ -17,13 +17,10 @@ from typing import Optional
 from dotenv import load_dotenv
 from openai import OpenAI, APIStatusError, APITimeoutError, APIConnectionError
 
-# ── Load .env once at import time ──────────────────────────────────────────
 load_dotenv()
 
-# ❌ DISABLED — legacy TTS system (pyttsx3)
 DEV_AUDIO_MODE: bool = False
 
-# ── LLM config ────────────────────────────────────────────────────────────
 _QW_BASE_URL      = "https://api.openai.com/v1"
 _QW_MODEL_ID      = "gpt-4o-mini"
 _QW_MAX_TOKENS    = 2048
@@ -34,13 +31,6 @@ _QW_MAX_RETRIES   = 4
 _QW_BACKOFF_BASE  = 2.0
 _QW_SYSTEM_PROMPT = "You are a helpful AI assistant."
 _QW_CLIENT: Optional[OpenAI] = None
-# ── pyttsx3 engine singleton ───────────────────────────────────────────────
-
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# PRIVATE — LLM CLIENT
-# ══════════════════════════════════════════════════════════════════════════
 
 def _get_client() -> OpenAI:
     global _QW_CLIENT
@@ -48,17 +38,12 @@ def _get_client() -> OpenAI:
         token = os.environ.get("OPENAI_API_KEY", "").strip()
         if not token:
             raise EnvironmentError(
-                "\n[llm] ❌  OPENAI_API_KEY is not set!\n"
+                "\n[llm]   OPENAI_API_KEY is not set!\n"
                 "  Fix: create a .env file with: OPENAI_API_KEY=sk-your_key_here"
             )
         _QW_CLIENT = OpenAI(base_url=_QW_BASE_URL, api_key=token)
     return _QW_CLIENT
 
-
-
-# ══════════════════════════════════════════════════════════════════════════
-# PUBLIC — CORE LLM CALL (unchanged, used internally)
-# ══════════════════════════════════════════════════════════════════════════
 
 def generate_response(
     prompt: str,
@@ -67,7 +52,7 @@ def generate_response(
 ) -> str:
     """Sends a prompt to the model and returns the response string."""
     client = _get_client()
-    print(f"[🚀] Calling HF Router → {_QW_MODEL_ID}")
+    print(f" Calling HF Router → {_QW_MODEL_ID}")
 
     for attempt in range(1, _QW_MAX_RETRIES + 1):
         backoff = _QW_BACKOFF_BASE ** (attempt - 1)
@@ -86,9 +71,9 @@ def generate_response(
             answer = completion.choices[0].message.content.strip()
             usage  = getattr(completion, "usage", None)
             if usage:
-                print(f"[✅] Done — {usage.total_tokens} tokens used.")
+                print(f" Done — {usage.total_tokens} tokens used.")
             else:
-                print(f"[✅] Response received ({len(answer)} chars).")
+                print(f" Response received ({len(answer)} chars).")
             return answer
 
         except APIStatusError as exc:
@@ -96,13 +81,13 @@ def generate_response(
             if code == 503:
                 try:    wait = max(float(exc.body.get("estimated_time", backoff)), backoff)
                 except: wait = backoff
-                print(f"[⏳] 503 – Model loading, waiting {wait:.0f}s… ({attempt}/{_QW_MAX_RETRIES})")
+                print(f" 503 – Model loading, waiting {wait:.0f}s… ({attempt}/{_QW_MAX_RETRIES})")
             elif code == 429:
-                print(f"[🚦] 429 – Rate limited, backing off {backoff:.0f}s… ({attempt}/{_QW_MAX_RETRIES})")
+                print(f" 429 – Rate limited, backing off {backoff:.0f}s… ({attempt}/{_QW_MAX_RETRIES})")
                 wait = backoff
             else:
                 msg = f"HTTP {code}: {str(exc)[:300]}"
-                print(f"[❌] {msg}")
+                print(f" {msg}")
                 return f"Error: {msg}"
             if attempt < _QW_MAX_RETRIES:
                 time.sleep(wait)
@@ -110,7 +95,7 @@ def generate_response(
             return f"Error: HTTP {code} after {_QW_MAX_RETRIES} attempts."
 
         except APITimeoutError:
-            print(f"[⏱️]  Timeout ({attempt}/{_QW_MAX_RETRIES})")
+            print(f"  Timeout ({attempt}/{_QW_MAX_RETRIES})")
             if attempt < _QW_MAX_RETRIES:
                 time.sleep(backoff)
                 continue
@@ -118,7 +103,7 @@ def generate_response(
 
         except APIConnectionError as exc:
             msg = f"Connection error: {exc}"
-            print(f"[❌] {msg}")
+            print(f" {msg}")
             if attempt < _QW_MAX_RETRIES:
                 time.sleep(backoff)
                 continue
@@ -127,9 +112,7 @@ def generate_response(
     return f"Error: All {_QW_MAX_RETRIES} attempts failed."
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# PUBLIC — CENTRAL TTS-AWARE WRAPPER  ← NEW
-# ══════════════════════════════════════════════════════════════════════════
+
 
 def dev_ask_llm(
     system_prompt: str,
@@ -152,13 +135,11 @@ def dev_ask_llm(
     return response
 
 
-# ══════════════════════════════════════════════════════════════════════════
-# PUBLIC — HIGH-LEVEL HELPERS (now route through dev_ask_llm)
-# ══════════════════════════════════════════════════════════════════════════
+
 
 def correct_text(text: str) -> str:
     """Corrects and enriches OCR-extracted text."""
-    print("[✏️]  Correcting text…")
+    print(" Correcting text…")
     system = "You are an expert educational content editor."
     user   = (
         "Correct the spelling and grammar of this educational content. "
@@ -171,7 +152,7 @@ def correct_text(text: str) -> str:
 
 def summarize_text(text: str) -> str:
     """Generates a comprehensive summary of the given text."""
-    print("[📌] Summarizing text…")
+    print(" Summarizing text…")
     system = "You are an expert educational content summarizer."
     user   = (
         "Write a detailed and comprehensive summary of the following educational text. "
