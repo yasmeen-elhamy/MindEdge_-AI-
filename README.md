@@ -70,8 +70,8 @@ Client (Web / Mobile)
 ## 🛠️ Tech Stack
 
 ### Backend
-- Node.js
-- Express.js
+-Python / FastAPI
+- Uvicorn
 - RESTful APIs
 - JWT Authentication
 
